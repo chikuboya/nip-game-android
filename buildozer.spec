@@ -3,13 +3,17 @@ title = Nip Strategy Game
 package.name = nipgame
 package.domain = org.test
 source.dir = .
-# 日本語フォントを含める設定
 source.include_exts = py,png,jpg,kv,atlas,ttc,ttf
 version = 0.1
-requirements = python3,kivy==2.3.1,kivy_deps.sdl2,kivy_deps.glew,kivy_deps.angle
+
+# 必須ライブラリを最小限に絞ります
+requirements = python3,kivy
 
 orientation = portrait
 fullscreen = 0
 android.archs = arm64-v8a, armeabi-v7a
 android.allow_backup = True
+
+# 重要：自動的にライセンスに同意する設定
 android.accept_sdk_license = True
+android.skip_update = False
