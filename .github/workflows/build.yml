@@ -3,7 +3,8 @@ on: [push, pull_request]
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # 24.04(latest)ではなく、より安定している22.04を明示的に指定します
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -16,15 +17,18 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update
-          # libtinfo5を削除し、最新OSに対応したライブラリに変更しました
-          sudo apt install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev python3-pip
-          pip3 install --user --upgrade Cython==0.29.33 buildozer
+          sudo apt install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev python3-pip
+          # CythonのバージョンをBuildozerが好む古いものに固定します
+          pip3 install --user --upgrade "Cython<3.0.0" buildozer
 
       - name: Build with Buildozer
         run: |
           export PATH=$PATH:$HOME/.local/bin
-          # 詳細ログを出しつつ規約に自動同意
-          yes | buildozer --verbose android debug
+          # ログレベルを2（詳細）にして、何が起きているか完全に可視化します
+          buildozer -v android debug
+        env:
+          # インタラクティブな入力を求められないように強制します
+          APP_ANDROID_ACCEPT_SDK_LICENSE: "1"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
