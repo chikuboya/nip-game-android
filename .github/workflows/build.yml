@@ -16,14 +16,15 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev python3-pip
+          # libtinfo5を削除し、最新OSに対応したライブラリに変更しました
+          sudo apt install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev python3-pip
           pip3 install --user --upgrade Cython==0.29.33 buildozer
 
       - name: Build with Buildozer
         run: |
           export PATH=$PATH:$HOME/.local/bin
-          # すべての規約確認に自動で "y" を答える最強の設定
-          yes | buildozer android debug
+          # 詳細ログを出しつつ規約に自動同意
+          yes | buildozer --verbose android debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
