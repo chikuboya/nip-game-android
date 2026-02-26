@@ -7,6 +7,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
       - name: Install dependencies
         run: |
           sudo apt update
@@ -16,7 +22,7 @@ jobs:
       - name: Build with Buildozer
         run: |
           export PATH=$PATH:$HOME/.local/bin
-          # 途中で止まらないように「yes」を自動入力する設定です
+          # すべての規約確認に自動で "y" を答える最強の設定
           yes | buildozer android debug
 
       - name: Upload APK
