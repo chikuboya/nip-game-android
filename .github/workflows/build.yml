@@ -2,16 +2,19 @@ name: Build APK
 on: [push, pull_request]
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
+
       - name: Build with Buildozer
-        uses: ArtemSerebriakov/buildozer-action@v1
+        uses: ArtemSerebriakov/buildozer-action@v1.6.1
         with:
           buildozer_version: master
           command: buildozer android debug
+          repository_display_name: NipGame
+
       - name: Upload APK
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: package
           path: bin/*.apk
