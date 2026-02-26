@@ -1,19 +1,21 @@
 name: Build APK
 on: [push, pull_request]
+
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Build with Buildozer
-        uses: ArtemSerebriakov/buildozer-action@v1.6.1
+        # より信頼性の高い別のアクションに変更しました
+        uses: Enteee/buildozer-action@v1.2.1
         with:
-          buildozer_version: master
           command: buildozer android debug
-          repository_display_name: NipGame
+          buildozer_version: master
 
       - name: Upload APK
+        # 廃止されたv2から最新のv4に更新しました
         uses: actions/upload-artifact@v4
         with:
           name: package
