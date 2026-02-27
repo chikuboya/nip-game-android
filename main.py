@@ -2,14 +2,6 @@ import math
 import random
 import sys
 import asyncio
-from kivy.core.text import LabelBase, DEFAULT_FONT
-
-# フォント登録
-try:
-    LabelBase.register(DEFAULT_FONT, "font.ttc")
-except Exception as e:
-    print(f"Font error: {e}")
-
 from kivy.app import App
 from kivy.uix.widget import Widget
 from kivy.uix.boxlayout import BoxLayout
@@ -22,8 +14,19 @@ from kivy.properties import DictProperty, StringProperty, NumericProperty, Objec
 from kivy.vector import Vector
 from kivy.clock import Clock
 from kivy.lang import Builder
+from kivy.core.text import LabelBase, DEFAULT_FONT
 
-# --- 盤面定義 (あなたのロジックを保持) ---
+# --- 環境判定とフォント設定 ---
+IS_WEB = 'pygbag' in sys.modules
+
+try:
+    # Android/PCではフォントを読み込み、Web版ではフリーズ防止のためスキップ
+    if not IS_WEB:
+        LabelBase.register(DEFAULT_FONT, "font.ttc")
+except Exception as e:
+    print(f"Font Load Error: {e}")
+
+# --- 盤面定義 (ニップ専用ロジックを保持) ---
 VALID_COORDS = [
     (2,0), (3,0), (4,0), (5,0), (2,7), (3,7), (4,7), (5,7),
     (1,1), (2,1), (3,1), (4,1), (5,1), (6,1), (1,6), (2,6), (3,6), (4,6), (5,6), (6,6),
@@ -46,8 +49,8 @@ class NipBoard(Widget):
 
     def draw_board(self, *args):
         self.canvas.clear()
-        # 【修正】Androidの角切れ防止のためpaddingを60→100にさらに強化
-        padding = 100
+        # 【修正】左右の見切れ防止のため余白を110に設定
+        padding = 110
         board_size = min(self.width, self.height) - padding
         cell_size = board_size / 7
         off_x = self.x + (self.width - board_size) / 2
@@ -81,11 +84,8 @@ class NipBoard(Widget):
 
     def on_touch_down(self, touch):
         app = App.get_running_app()
-        # 【修正】Web版が動かない問題への対策: CPUの番でもタッチを検知するようにし、CPUの思考中は操作を受け付けないようにする
-        if app.mode == "PvE" and app.turn == app.cpu_color and app.cpu_thinking: return
-        
-        # 【修正】paddingを100に合わせる
-        padding = 100 
+        if app.turn == app.cpu_color and app.mode == "PvE": return
+        padding = 110 
         board_size = min(self.width, self.height) - padding
         cell_size = board_size / 7
         off_x = self.x + (self.width - board_size) / 2
@@ -103,15 +103,12 @@ class MenuScreen(Screen):
 class GameScreen(Screen):
     board_widget = ObjectProperty(None)
     status_label = ObjectProperty(None)
-    big_res_label = ObjectProperty(None)
 
 class NipApp(App):
     board_state = DictProperty({})
     turn = StringProperty('black')
     status_text = StringProperty("")
-    big_res_text = StringProperty("")
-    # 【追加】CPUが思考中かどうかを管理するプロパティ
-    cpu_thinking = NumericProperty(0) 
+    big_res_text = StringProperty("") # 巨大文字用
     
     def build(self):
         self.mode = "PvP"
@@ -140,18 +137,16 @@ class NipApp(App):
         self.turn = 'black'
         self.history = []
         self.big_res_text = ""
-        self.cpu_thinking = 0 # リセット
         self.update_status()
         if self.mode == "PvE" and self.turn == self.cpu_color:
             Clock.schedule_once(lambda dt: self.cpu_move(), 0.6)
 
     def update_status(self):
         b, w = list(self.board_state.values()).count('black'), list(self.board_state.values()).count('white')
-        txt = f"黒: {b}  白: {w} | 次: {'黒' if self.turn == 'black' else '白'}"
-        if self.mode == "PvE": txt += f" (Lv{self.cpu_level})"
-        self.status_text = txt
+        turn_str = '黒' if self.turn == 'black' else '白'
+        self.status_text = f"黒: {b}  白: {w} | 次: {turn_str} (Lv{self.cpu_level})"
 
-    # --- 以下、あなたの高度なロジックをそのまま保持 ---
+    # --- 以下、あなたの元のロジックを完全復元 ---
     def get_flipped(self, start, color, board_state):
         if board_state[start] is not None: return []
         opp = 'white' if color == 'black' else 'black'
@@ -204,12 +199,6 @@ class NipApp(App):
             if st is None: continue
             val = 10 if is_endgame else 1
             if coord in CIRCUMFERENCE: val += 15 if not is_endgame else 5
-            if not is_endgame:
-                liberties = 0
-                for dx, dy in [(1,0),(-1,0),(0,1),(0,-1),(1,1),(1,-1),(-1,1),(-1,-1)]:
-                    neighbor = (coord[0]+dx, coord[1]+dy)
-                    if neighbor in VALID_COORDS and board[neighbor] is None: liberties += 1
-                val -= liberties * 2
             score += val if st == color else -val
         return score
 
@@ -221,7 +210,6 @@ class NipApp(App):
             f = self.get_flipped(n, curr_p, board)
             if f: moves.append((n, f))
         if depth == 0 or not moves: return self.evaluate_board(board, color)
-        moves.sort(key=lambda x: len(x[1]) + (20 if x[0] in CIRCUMFERENCE else 0), reverse=True)
         
         v = -20000 if is_maximizing else 20000
         for move, flipped in moves:
@@ -237,45 +225,19 @@ class NipApp(App):
             if beta <= alpha: break
         return v
 
-    # 【修正】Web版対策: CPUの思考処理を非同期にする
-    async def cpu_move_async(self):
-        self.cpu_thinking = 1 # 思考開始
-        await asyncio.sleep(0.6) # 思考時間を演出
-        
-        moves = [(n, self.get_flipped(n, self.turn, self.board_state)) for n in VALID_COORDS if self.get_flipped(n, self.turn, self.board_state)]
-        if not moves: self.cpu_thinking = 0; return
-        
-        stone_count = sum(1 for v in self.board_state.values() if v is not None)
-        if self.turn == 'white' and stone_count == 5:
-            best_m = random.choice(moves)[0]
-        else:
-            miss_prob = {1: 0.6, 2: 0.3, 3: 0.05, 4: 0.0, 5: 0.0}[self.cpu_level]
-            depth = {1: 0, 2: 1, 3: 2, 4: 2, 5: 3}[self.cpu_level]
-            if random.random() < miss_prob and len(moves) > 1:
-                best_m = random.choice(moves)[0]
-            else:
-                scored = []
-                # 【修正】Minimaxの呼び出しを非同期にする必要があるが、現状のロジックを維持するため、
-                # ここではMinimax自体の非同期化は見送り、cpu_move全体を非同期関数にするに留める。
-                # (Minimaxが重い場合、Web版ではフリーズする可能性があるが、現状のロジックを優先)
-                for m, f in moves:
-                    nb = self.board_state.copy(); nb[m] = self.turn
-                    for s in f: 
-                        if s != (99,99): nb[s] = self.turn
-                    v = self.minimax(nb, depth, -20000, 20000, False, self.turn)
-                    scored.append((m, v))
-                scored.sort(key=lambda x: x[1], reverse=True)
-                best_v = scored[0][1]
-                margin = 2 if (list(self.board_state.values()).count(None) > 30 and self.cpu_level >= 4) else 0
-                candidates = [x for x in scored if x[1] >= (best_v - margin)]
-                best_m = random.choices([c[0] for c in candidates], weights=[10 if c[1]==best_v else 2 for c in candidates], k=1)[0]
-        
-        self.cpu_thinking = 0 # 思考終了
-        self.make_move(best_m)
-
-    # 従来のcpu_moveは、cpu_move_asyncを呼び出す形にする
     def cpu_move(self):
-        Clock.schedule_once(lambda dt: asyncio.ensure_future(self.cpu_move_async()), 0.1)
+        moves = [(n, self.get_flipped(n, self.turn, self.board_state)) for n in VALID_COORDS if self.get_flipped(n, self.turn, self.board_state)]
+        if not moves: return
+        depth = {1: 0, 2: 1, 3: 2, 4: 2, 5: 3}[self.cpu_level]
+        scored = []
+        for m, f in moves:
+            nb = self.board_state.copy(); nb[m] = self.turn
+            for s in f: 
+                if s != (99,99): nb[s] = self.turn
+            v = self.minimax(nb, depth, -20000, 20000, False, self.turn)
+            scored.append((m, v))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        self.make_move(scored[0][0])
 
     def make_move(self, coord):
         to_flip = self.get_flipped(coord, self.turn, self.board_state)
@@ -297,20 +259,16 @@ class NipApp(App):
             if not [n for n in VALID_COORDS if self.get_flipped(n, opp, self.board_state)]:
                 self.end_game()
             else:
-                self.history.append({'board': self.board_state.copy(), 'turn': self.turn})
                 self.turn = opp
                 self.update_status()
                 if self.mode == "PvE" and self.turn == self.cpu_color:
-                    self.cpu_move()
+                    Clock.schedule_once(lambda dt: self.cpu_move(), 0.6)
         elif self.mode == "PvE" and self.turn == self.cpu_color:
-            self.cpu_move()
+            Clock.schedule_once(lambda dt: self.cpu_move(), 0.6)
 
     def undo(self):
         if not self.history: return
         self.big_res_text = ""
-        # CPUが思考中はUndo不可
-        if self.mode == "PvE" and self.cpu_thinking: return
-        
         if self.mode == "PvE":
             while self.history:
                 s = self.history.pop()
@@ -324,10 +282,10 @@ class NipApp(App):
     def end_game(self):
         b, w = list(self.board_state.values()).count('black'), list(self.board_state.values()).count('white')
         res = "引き分け" if b==w else ("黒の勝ち！" if b>w else "白の勝ち！")
-        self.status_text = f"終了! 黒:{b} 白:{w}"
         self.big_res_text = res
 
-# --- デザイン定義 (レイアウト修正) ---
+# --- 元のデザインを維持しつつ、巨大文字を追加 ---
+# --- デザイン修正版 ---
 Builder.load_string('''
 <MenuScreen>:
     BoxLayout:
@@ -403,12 +361,6 @@ Builder.load_string('''
 <GameScreen>:
     BoxLayout:
         orientation: 'vertical'
-        canvas.before:
-            Color:
-                rgba: 0.56, 0.74, 0.56, 1
-            Rectangle:
-                pos: self.pos
-                size: self.size
         BoxLayout:
             size_hint_y: 0.1
             padding: 5
@@ -419,40 +371,31 @@ Builder.load_string('''
             Button:
                 text: "メニュー"
                 on_release: app.sm.current = 'menu'
-        
-        # 盤面
         NipBoard:
             id: board_widget
             board_state: app.board_state
             size_hint_y: 0.7
-        
-        # 巨大な勝利メッセージ用ラベル
         Label:
-            id: big_res_label
             text: app.big_res_text
-            font_size: '54sp'
-            color: 1, 0.1, 0.1, 1 
+            font_size: '60sp'
+            color: 1, 0, 0, 1
             size_hint_y: 0.12
             bold: True
-
-        # 下のステータスラベル
         Label:
             id: status_label
             text: app.status_text
             size_hint_y: 0.08
             bold: True
             font_size: '18sp'
-            color: 0, 0, 0, 1
 ''')
 
-# --- 起動コード (iOS/Android両対応) ---
+# --- 最終起動コード ---
+async def main():
+    app = NipApp()
+    await app.async_run()
+
 if __name__ == "__main__":
-    if 'pygbag' in sys.modules:
-        # iOS/ブラウザ用
-        async def main():
-            app = NipApp()
-            await app.async_run()
+    if IS_WEB:
         asyncio.run(main())
     else:
-        # Android用
         NipApp().run()
