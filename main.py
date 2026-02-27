@@ -1,3 +1,4 @@
+import asyncio
 import math
 import random
 from kivy.core.text import LabelBase, DEFAULT_FONT
@@ -389,4 +390,10 @@ Builder.load_string('''
 
 if __name__ == "__main__":
 
-    NipApp().run()
+# 今までの NipApp().run() を消して、以下のように書きます
+async def main():
+    await NipApp().async_run()
+
+if __name__ == '__main__':
+    asyncio.run(main())
+
