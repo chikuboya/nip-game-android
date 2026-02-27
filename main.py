@@ -1,5 +1,7 @@
 import os
+# Web版の起動を安定させるための設定
 os.environ['KIVY_NO_ARGS'] = '1'
+
 import math
 import random
 import sys
@@ -14,16 +16,10 @@ from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.core.text import LabelBase, DEFAULT_FONT
 
-# --- 環境判定とフォント設定 ---
+# --- 環境判定 ---
 IS_WEB = 'pygbag' in sys.modules
 
-try:
-    if not IS_WEB:
-        LabelBase.register(DEFAULT_FONT, "font.ttc")
-except Exception as e:
-    print(f"Font Load Error: {e}")
-
-# --- 盤面定義 ---
+# --- 盤面座標データ ---
 VALID_COORDS = [
     (2,0), (3,0), (4,0), (5,0), (2,7), (3,7), (4,7), (5,7),
     (1,1), (2,1), (3,1), (4,1), (5,1), (6,1), (1,6), (2,6), (3,6), (4,6), (5,6), (6,6),
@@ -89,7 +85,7 @@ class NipBoard(Widget):
         for c in VALID_COORDS:
             tx, ty = off_x + c[0] * cell_size, off_y + c[1] * cell_size
             if Vector(touch.pos).distance(Vector(tx, ty)) < cell_size * 0.45:
-                app.make_move(c)
+                app.make_move_async(c)
                 return True
         return super().on_touch_down(touch)
 
@@ -97,8 +93,7 @@ class MenuScreen(Screen):
     pass
 
 class GameScreen(Screen):
-    board_widget = ObjectProperty(None)
-    status_label = ObjectProperty(None)
+    pass
 
 class NipApp(App):
     board_state = DictProperty({})
@@ -119,11 +114,7 @@ class NipApp(App):
     def start_game(self, mode, cpu_side=None, level=3):
         self.mode = mode
         self.cpu_level = level
-        if mode == "PvE":
-            # 内部的な色管理
-            self.cpu_color = 'black' if cpu_side == "先手" else 'white'
-        else:
-            self.cpu_color = None
+        self.cpu_color = 'black' if cpu_side == "先手" else 'white' if mode == "PvE" else None
         self.sm.current = 'game'
         self.reset_game()
 
@@ -136,15 +127,15 @@ class NipApp(App):
         self.big_res_text = ""
         self.update_status()
         if self.mode == "PvE" and self.turn == self.cpu_color:
-            Clock.schedule_once(lambda dt: self.cpu_move(), 0.6)
+            asyncio.create_task(self.cpu_move_task())
 
     def update_status(self):
         b, w = list(self.board_state.values()).count('black'), list(self.board_state.values()).count('white')
         turn_str = 'B' if self.turn == 'black' else 'W'
-        self.status_text = f"B: {b}  W: {w} | Next: {turn_str} (Lv{self.cpu_level})"
+        self.status_text = f"B: {b} W: {w} | Next: {turn_str} (Lv{self.cpu_level})"
 
     def get_flipped(self, start, color, board_state):
-        if board_state[start] is not None: return []
+        if board_state.get(start) is not None: return []
         opp = 'white' if color == 'black' else 'black'
         normal_flipped = []
         for dx, dy in [(1,0),(-1,0),(0,1),(0,-1),(1,1),(1,-1),(-1,1),(-1,-1)]:
@@ -155,7 +146,6 @@ class NipApp(App):
                 elif st == color: normal_flipped.extend(path); break
                 else: break
                 curr = (curr[0]+dx, curr[1]+dy)
-        
         circle_flipped = []
         if start in CIRCUMFERENCE:
             idx = CIRCUMFERENCE.index(start)
@@ -164,7 +154,7 @@ class NipApp(App):
                 path = []
                 for i in range(1, len(circle)):
                     curr = circle[(i * d) % len(circle)]
-                    st = board_state[curr]
+                    st = board_state.get(curr)
                     if st == opp: path.append(curr)
                     elif st == color: circle_flipped.extend(path); break
                     else: break
@@ -183,87 +173,87 @@ class NipApp(App):
         curr_p = color if is_maximizing else opp
         moves = [(n, self.get_flipped(n, curr_p, board)) for n in VALID_COORDS if self.get_flipped(n, curr_p, board)]
         if depth == 0 or not moves: return self.evaluate_board(board, color)
-        
         v = -20000 if is_maximizing else 20000
         for move, flipped in moves:
             nb = board.copy()
             nb[move] = curr_p
             for f in flipped: nb[f] = curr_p
             res = self.minimax(nb, depth - 1, alpha, beta, not is_maximizing, color)
-            if is_maximizing:
-                v = max(v, res); alpha = max(alpha, v)
-            else:
-                v = min(v, res); beta = min(beta, v)
+            if is_maximizing: v = max(v, res); alpha = max(alpha, v)
+            else: v = min(v, res); beta = min(beta, v)
             if beta <= alpha: break
         return v
 
-    def cpu_move(self):
-        # 有効な手をすべて取得
+    async def cpu_move_task(self):
+        await asyncio.sleep(0.6)
         moves = [(n, self.get_flipped(n, self.turn, self.board_state)) for n in VALID_COORDS if self.get_flipped(n, self.turn, self.board_state)]
         if not moves: return
-        
-        # 盤面の石の数をカウント
+
         stone_count = sum(1 for v in self.board_state.values() if v is not None)
         empty_count = len(VALID_COORDS) - stone_count
         
-        best_m = None
-
-        # --- 【修正】白（後手）の最初の一手は「盤面に5個」ある時 ---
-        # 黒が1手打った直後なので、石は必ず5個です
         if self.turn == 'white' and stone_count == 5:
             best_m = random.choice(moves)[0]
-        
         else:
-            # レベルに応じた深さで探索
             depth = {1: 0, 2: 1, 3: 2, 4: 2, 5: 3}[self.cpu_level]
             scored = []
             for m, f in moves:
-                nb = self.board_state.copy()
-                nb[m] = self.turn
-                for s in f:
-                    if s != (99,99): nb[s] = self.turn
+                nb = self.board_state.copy(); nb[m] = self.turn
+                for s in f: nb[s] = self.turn
                 v = self.minimax(nb, depth, -20000, 20000, False, self.turn)
                 scored.append((m, v))
-            
-            # 同じスコアの手が並んだ時に、常に同じ場所を選ばないようシャッフル
             random.shuffle(scored)
-            # その後、スコア順にソート
             scored.sort(key=lambda x: x[1], reverse=True)
             
-            # --- ロジック2: 空きマス30個以上の時、30%の確率で次善手 ---
             if empty_count > 30 and random.random() < 0.30 and len(scored) > 1:
                 top_k = min(3, len(scored))
                 best_m = scored[random.randint(0, top_k-1)][0]
             else:
                 best_m = scored[0][0]
+        
+        self.apply_move(best_m)
 
-        self.make_move(best_m)
+    def make_move_async(self, coord):
+        # 重複呼び出しを避けるため、ここでは石を置く処理だけを呼ぶ
+        self.apply_move(coord)
 
-    def make_move(self, coord):
+    def apply_move(self, coord):
         to_flip = self.get_flipped(coord, self.turn, self.board_state)
-        if to_flip:
-            self.history.append({'board': self.board_state.copy(), 'turn': self.turn})
-            new_board = self.board_state.copy()
-            new_board[coord] = self.turn
-            for n in to_flip: new_board[n] = self.turn
-            self.board_state = new_board
-            self.turn = 'white' if self.turn == 'black' else 'black'
-            self.update_status()
-            Clock.schedule_once(lambda dt: self.check_pass(), 0.1)
+        if not to_flip: return False
+        
+        self.history.append({'board': self.board_state.copy(), 'turn': self.turn})
+        new_board = self.board_state.copy()
+        new_board[coord] = self.turn
+        for n in to_flip: new_board[n] = self.turn
+        self.board_state = new_board
+        self.turn = 'white' if self.turn == 'black' else 'black'
+        self.update_status()
+        
+        # 次のターン判定（CPU起動含む）をここから呼び出す
+        asyncio.create_task(self.check_pass_task())
+        return True
 
-    def check_pass(self):
+    async def check_pass_task(self):
+        await asyncio.sleep(0.1)
+        # 交代した後のプレイヤーが打てる手があるか確認
         moves = [n for n in VALID_COORDS if self.get_flipped(n, self.turn, self.board_state)]
+        
         if not moves:
+            # 打てないならパス
             opp = 'white' if self.turn == 'black' else 'black'
+            # 相手も打てないなら終局
             if not [n for n in VALID_COORDS if self.get_flipped(n, opp, self.board_state)]:
                 self.end_game()
             else:
-                self.turn = opp
+                self.turn = opp # 再交代
                 self.update_status()
+                # パスしてCPUの番になった場合のみ動かす
                 if self.mode == "PvE" and self.turn == self.cpu_color:
-                    Clock.schedule_once(lambda dt: self.cpu_move(), 0.6)
-        elif self.mode == "PvE" and self.turn == self.cpu_color:
-            Clock.schedule_once(lambda dt: self.cpu_move(), 0.6)
+                    await self.cpu_move_task()
+        else:
+            # 打てる手があり、それがCPUの番なら動かす
+            if self.mode == "PvE" and self.turn == self.cpu_color:
+                await self.cpu_move_task()
 
     def undo(self):
         if not self.history: return
@@ -280,8 +270,7 @@ class NipApp(App):
 
     def end_game(self):
         b, w = list(self.board_state.values()).count('black'), list(self.board_state.values()).count('white')
-        res = "DRAW" if b==w else ("BLACK WIN!" if b>w else "WHITE WIN!")
-        self.big_res_text = res
+        self.big_res_text = "DRAW" if b==w else ("BLACK WIN!" if b>w else "WHITE WIN!")
 
 Builder.load_string('''
 <MenuScreen>:
@@ -364,7 +353,6 @@ Builder.load_string('''
                 text: "MENU"
                 on_release: app.sm.current = 'menu'
         NipBoard:
-            id: board_widget
             board_state: app.board_state
             size_hint_y: 0.7
         Label:
@@ -382,10 +370,11 @@ Builder.load_string('''
 
 async def main():
     app = NipApp()
+    # async_runを使用して、Kivyとasyncioのループを統合します
     await app.async_run()
 
 if __name__ == "__main__":
-    if IS_WEB:
+    try:
         asyncio.run(main())
-    else:
-        NipApp().run()  
+    except KeyboardInterrupt:
+        pass
