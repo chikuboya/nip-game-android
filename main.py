@@ -46,8 +46,8 @@ class NipBoard(Widget):
 
     def draw_board(self, *args):
         self.canvas.clear()
-        # 【修正】Androidの角切れ防止のためpaddingを40→60に強化
-        padding = 60
+        # 【修正】Androidの角切れ防止のためpaddingを60→100にさらに強化
+        padding = 100
         board_size = min(self.width, self.height) - padding
         cell_size = board_size / 7
         off_x = self.x + (self.width - board_size) / 2
@@ -81,8 +81,11 @@ class NipBoard(Widget):
 
     def on_touch_down(self, touch):
         app = App.get_running_app()
-        if app.turn == app.cpu_color and app.mode == "PvE": return
-        padding = 60 # draw_boardのpaddingと合わせる
+        # 【修正】Web版が動かない問題への対策: CPUの番でもタッチを検知するようにし、CPUの思考中は操作を受け付けないようにする
+        if app.mode == "PvE" and app.turn == app.cpu_color and app.cpu_thinking: return
+        
+        # 【修正】paddingを100に合わせる
+        padding = 100 
         board_size = min(self.width, self.height) - padding
         cell_size = board_size / 7
         off_x = self.x + (self.width - board_size) / 2
@@ -100,15 +103,15 @@ class MenuScreen(Screen):
 class GameScreen(Screen):
     board_widget = ObjectProperty(None)
     status_label = ObjectProperty(None)
-    # 【追加】巨大文字用のプロパティ
     big_res_label = ObjectProperty(None)
 
 class NipApp(App):
     board_state = DictProperty({})
     turn = StringProperty('black')
     status_text = StringProperty("")
-    # 【追加】巨大文字用のプロパティ
     big_res_text = StringProperty("")
+    # 【追加】CPUが思考中かどうかを管理するプロパティ
+    cpu_thinking = NumericProperty(0) 
     
     def build(self):
         self.mode = "PvP"
@@ -136,7 +139,8 @@ class NipApp(App):
         self.board_state[(4,3)] = self.board_state[(3,4)] = 'black'
         self.turn = 'black'
         self.history = []
-        self.big_res_text = "" # リセット
+        self.big_res_text = ""
+        self.cpu_thinking = 0 # リセット
         self.update_status()
         if self.mode == "PvE" and self.turn == self.cpu_color:
             Clock.schedule_once(lambda dt: self.cpu_move(), 0.6)
@@ -233,9 +237,14 @@ class NipApp(App):
             if beta <= alpha: break
         return v
 
-    def cpu_move(self):
+    # 【修正】Web版対策: CPUの思考処理を非同期にする
+    async def cpu_move_async(self):
+        self.cpu_thinking = 1 # 思考開始
+        await asyncio.sleep(0.6) # 思考時間を演出
+        
         moves = [(n, self.get_flipped(n, self.turn, self.board_state)) for n in VALID_COORDS if self.get_flipped(n, self.turn, self.board_state)]
-        if not moves: return
+        if not moves: self.cpu_thinking = 0; return
+        
         stone_count = sum(1 for v in self.board_state.values() if v is not None)
         if self.turn == 'white' and stone_count == 5:
             best_m = random.choice(moves)[0]
@@ -246,6 +255,9 @@ class NipApp(App):
                 best_m = random.choice(moves)[0]
             else:
                 scored = []
+                # 【修正】Minimaxの呼び出しを非同期にする必要があるが、現状のロジックを維持するため、
+                # ここではMinimax自体の非同期化は見送り、cpu_move全体を非同期関数にするに留める。
+                # (Minimaxが重い場合、Web版ではフリーズする可能性があるが、現状のロジックを優先)
                 for m, f in moves:
                     nb = self.board_state.copy(); nb[m] = self.turn
                     for s in f: 
@@ -257,7 +269,13 @@ class NipApp(App):
                 margin = 2 if (list(self.board_state.values()).count(None) > 30 and self.cpu_level >= 4) else 0
                 candidates = [x for x in scored if x[1] >= (best_v - margin)]
                 best_m = random.choices([c[0] for c in candidates], weights=[10 if c[1]==best_v else 2 for c in candidates], k=1)[0]
+        
+        self.cpu_thinking = 0 # 思考終了
         self.make_move(best_m)
+
+    # 従来のcpu_moveは、cpu_move_asyncを呼び出す形にする
+    def cpu_move(self):
+        Clock.schedule_once(lambda dt: asyncio.ensure_future(self.cpu_move_async()), 0.1)
 
     def make_move(self, coord):
         to_flip = self.get_flipped(coord, self.turn, self.board_state)
@@ -283,13 +301,16 @@ class NipApp(App):
                 self.turn = opp
                 self.update_status()
                 if self.mode == "PvE" and self.turn == self.cpu_color:
-                    Clock.schedule_once(lambda dt: self.cpu_move(), 0.6)
+                    self.cpu_move()
         elif self.mode == "PvE" and self.turn == self.cpu_color:
-            Clock.schedule_once(lambda dt: self.cpu_move(), 0.6)
+            self.cpu_move()
 
     def undo(self):
         if not self.history: return
-        self.big_res_text = "" # Undoしたら勝利文字を消す
+        self.big_res_text = ""
+        # CPUが思考中はUndo不可
+        if self.mode == "PvE" and self.cpu_thinking: return
+        
         if self.mode == "PvE":
             while self.history:
                 s = self.history.pop()
@@ -303,9 +324,7 @@ class NipApp(App):
     def end_game(self):
         b, w = list(self.board_state.values()).count('black'), list(self.board_state.values()).count('white')
         res = "引き分け" if b==w else ("黒の勝ち！" if b>w else "白の勝ち！")
-        # 下のラベルも更新しつつ
         self.status_text = f"終了! 黒:{b} 白:{w}"
-        # 【修正】真ん中の巨大ラベルに3倍の文字サイズで結果を表示
         self.big_res_text = res
 
 # --- デザイン定義 (レイアウト修正) ---
@@ -407,12 +426,12 @@ Builder.load_string('''
             board_state: app.board_state
             size_hint_y: 0.7
         
-        # 【追加】巨大な勝利メッセージ用ラベル (盤面とステータスの間)
+        # 巨大な勝利メッセージ用ラベル
         Label:
             id: big_res_label
             text: app.big_res_text
-            font_size: '54sp'  # 通常(18sp)の3倍
-            color: 1, 0.1, 0.1, 1 # 赤色で目立たせる
+            font_size: '54sp'
+            color: 1, 0.1, 0.1, 1 
             size_hint_y: 0.12
             bold: True
 
