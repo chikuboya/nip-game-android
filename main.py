@@ -3,7 +3,7 @@ import random
 from kivy.core.text import LabelBase, DEFAULT_FONT
 
 # ここでフォルダに置いたフォントファイルを指定します
-LabelBase.register(DEFAULT_FONT, "font.ttc")
+# LabelBase.register(DEFAULT_FONT, "font.ttc")
 from kivy.app import App
 from kivy.uix.widget import Widget
 from kivy.uix.boxlayout import BoxLayout
@@ -388,4 +388,5 @@ Builder.load_string('''
 ''')
 
 if __name__ == "__main__":
+
     NipApp().run()
