@@ -1,5 +1,4 @@
 import os
-# Web版の起動を安定させるための設定
 os.environ['KIVY_NO_ARGS'] = '1'
 
 import math
@@ -16,10 +15,10 @@ from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.core.text import LabelBase, DEFAULT_FONT
 
-# --- 環境判定 ---
+# --- Environment Check ---
 IS_WEB = 'pygbag' in sys.modules
 
-# --- 盤面座標データ ---
+# --- Board Data ---
 VALID_COORDS = [
     (2,0), (3,0), (4,0), (5,0), (2,7), (3,7), (4,7), (5,7),
     (1,1), (2,1), (3,1), (4,1), (5,1), (6,1), (1,6), (2,6), (3,6), (4,6), (5,6), (6,6),
@@ -114,7 +113,7 @@ class NipApp(App):
     def start_game(self, mode, cpu_side=None, level=3):
         self.mode = mode
         self.cpu_level = level
-        self.cpu_color = 'black' if cpu_side == "先手" else 'white' if mode == "PvE" else None
+        self.cpu_color = 'black' if cpu_side == "FIRST" else 'white' if mode == "PvE" else None
         self.sm.current = 'game'
         self.reset_game()
 
@@ -168,7 +167,8 @@ class NipApp(App):
             score += val if st == color else -val
         return score
 
-    def minimax(self, board, depth, alpha, beta, is_maximizing, color):
+    async def minimax(self, board, depth, alpha, beta, is_maximizing, color):
+        if depth >= 2: await asyncio.sleep(0)
         opp = 'white' if color == 'black' else 'black'
         curr_p = color if is_maximizing else opp
         moves = [(n, self.get_flipped(n, curr_p, board)) for n in VALID_COORDS if self.get_flipped(n, curr_p, board)]
@@ -178,7 +178,7 @@ class NipApp(App):
             nb = board.copy()
             nb[move] = curr_p
             for f in flipped: nb[f] = curr_p
-            res = self.minimax(nb, depth - 1, alpha, beta, not is_maximizing, color)
+            res = await self.minimax(nb, depth - 1, alpha, beta, not is_maximizing, color)
             if is_maximizing: v = max(v, res); alpha = max(alpha, v)
             else: v = min(v, res); beta = min(beta, v)
             if beta <= alpha: break
@@ -200,7 +200,7 @@ class NipApp(App):
             for m, f in moves:
                 nb = self.board_state.copy(); nb[m] = self.turn
                 for s in f: nb[s] = self.turn
-                v = self.minimax(nb, depth, -20000, 20000, False, self.turn)
+                v = await self.minimax(nb, depth, -20000, 20000, False, self.turn)
                 scored.append((m, v))
             random.shuffle(scored)
             scored.sort(key=lambda x: x[1], reverse=True)
@@ -210,17 +210,14 @@ class NipApp(App):
                 best_m = scored[random.randint(0, top_k-1)][0]
             else:
                 best_m = scored[0][0]
-        
         self.apply_move(best_m)
 
     def make_move_async(self, coord):
-        # 重複呼び出しを避けるため、ここでは石を置く処理だけを呼ぶ
         self.apply_move(coord)
 
     def apply_move(self, coord):
         to_flip = self.get_flipped(coord, self.turn, self.board_state)
         if not to_flip: return False
-        
         self.history.append({'board': self.board_state.copy(), 'turn': self.turn})
         new_board = self.board_state.copy()
         new_board[coord] = self.turn
@@ -228,30 +225,22 @@ class NipApp(App):
         self.board_state = new_board
         self.turn = 'white' if self.turn == 'black' else 'black'
         self.update_status()
-        
-        # 次のターン判定（CPU起動含む）をここから呼び出す
         asyncio.create_task(self.check_pass_task())
         return True
 
     async def check_pass_task(self):
         await asyncio.sleep(0.1)
-        # 交代した後のプレイヤーが打てる手があるか確認
         moves = [n for n in VALID_COORDS if self.get_flipped(n, self.turn, self.board_state)]
-        
         if not moves:
-            # 打てないならパス
             opp = 'white' if self.turn == 'black' else 'black'
-            # 相手も打てないなら終局
             if not [n for n in VALID_COORDS if self.get_flipped(n, opp, self.board_state)]:
                 self.end_game()
             else:
-                self.turn = opp # 再交代
+                self.turn = opp
                 self.update_status()
-                # パスしてCPUの番になった場合のみ動かす
                 if self.mode == "PvE" and self.turn == self.cpu_color:
                     await self.cpu_move_task()
         else:
-            # 打てる手があり、それがCPUの番なら動かす
             if self.mode == "PvE" and self.turn == self.cpu_color:
                 await self.cpu_move_task()
 
@@ -337,7 +326,7 @@ Builder.load_string('''
             size_hint_y: 0.2
             background_color: 0.5, 0.8, 1, 1
             on_release:
-                side = "先手" if cpu_black.state == 'down' else "後手"
+                side = "FIRST" if cpu_black.state == 'down' else "SECOND"
                 level = 1 if lv1.state == 'down' else (2 if lv2.state == 'down' else (3 if lv3.state == 'down' else (4 if lv4.state == 'down' else 5)))
                 app.start_game("PvE", side, level)
 
@@ -370,11 +359,7 @@ Builder.load_string('''
 
 async def main():
     app = NipApp()
-    # async_runを使用して、Kivyとasyncioのループを統合します
     await app.async_run()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+    asyncio.run(main())
