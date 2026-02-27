@@ -20,13 +20,13 @@ from kivy.core.text import LabelBase, DEFAULT_FONT
 IS_WEB = 'pygbag' in sys.modules
 
 try:
-    # Android/PCではフォントを読み込み、Web版ではフリーズ防止のためスキップ
     if not IS_WEB:
         LabelBase.register(DEFAULT_FONT, "font.ttc")
+    # Web版では標準フォントを使用し、ファイルの読み込み待ちによるフリーズを回避
 except Exception as e:
     print(f"Font Load Error: {e}")
 
-# --- 盤面定義 (ニップ専用ロジックを保持) ---
+# --- 盤面定義 ---
 VALID_COORDS = [
     (2,0), (3,0), (4,0), (5,0), (2,7), (3,7), (4,7), (5,7),
     (1,1), (2,1), (3,1), (4,1), (5,1), (6,1), (1,6), (2,6), (3,6), (4,6), (5,6), (6,6),
@@ -49,7 +49,6 @@ class NipBoard(Widget):
 
     def draw_board(self, *args):
         self.canvas.clear()
-        # 【修正】左右の見切れ防止のため余白を110に設定
         padding = 110
         board_size = min(self.width, self.height) - padding
         cell_size = board_size / 7
@@ -108,7 +107,7 @@ class NipApp(App):
     board_state = DictProperty({})
     turn = StringProperty('black')
     status_text = StringProperty("")
-    big_res_text = StringProperty("") # 巨大文字用
+    big_res_text = StringProperty("")
     
     def build(self):
         self.mode = "PvP"
@@ -143,10 +142,9 @@ class NipApp(App):
 
     def update_status(self):
         b, w = list(self.board_state.values()).count('black'), list(self.board_state.values()).count('white')
-        turn_str = '黒' if self.turn == 'black' else '白'
-        self.status_text = f"黒: {b}  白: {w} | 次: {turn_str} (Lv{self.cpu_level})"
+        turn_str = 'B' if self.turn == 'black' else 'W'
+        self.status_text = f"B: {b}  W: {w} | Next: {turn_str} (Lv{self.cpu_level})"
 
-    # --- 以下、あなたの元のロジックを完全復元 ---
     def get_flipped(self, start, color, board_state):
         if board_state[start] is not None: return []
         opp = 'white' if color == 'black' else 'black'
@@ -161,44 +159,25 @@ class NipApp(App):
                 curr = (curr[0]+dx, curr[1]+dy)
         
         circle_flipped = []
-        is_last_circum_piece = False
-        has_my_stone_on_circum = False
         if start in CIRCUMFERENCE:
-            for node in CIRCUMFERENCE:
-                if node != start and board_state[node] == color:
-                    has_my_stone_on_circum = True; break
-            empty_on_circum = [n for n in CIRCUMFERENCE if board_state[n] is None]
-            if len(empty_on_circum) == 1: is_last_circum_piece = True
-            
             idx = CIRCUMFERENCE.index(start)
             circle = CIRCUMFERENCE[idx:] + CIRCUMFERENCE[:idx]
-            if all(board_state[n] == opp for n in circle[1:]):
-                circle_flipped.extend(circle[1:])
-            else:
-                for d in [1, -1]:
-                    path = []
-                    for i in range(1, len(circle)):
-                        curr = circle[(i * d) % len(circle)]
-                        st = board_state[curr]
-                        if st == opp: path.append(curr)
-                        elif st == color: circle_flipped.extend(path); break
-                        else: break
+            for d in [1, -1]:
+                path = []
+                for i in range(1, len(circle)):
+                    curr = circle[(i * d) % len(circle)]
+                    st = board_state[curr]
+                    if st == opp: path.append(curr)
+                    elif st == color: circle_flipped.extend(path); break
+                    else: break
         total_flipped = list(set(normal_flipped + circle_flipped))
-        if is_last_circum_piece:
-            if normal_flipped or has_my_stone_on_circum:
-                return total_flipped if total_flipped else [(99,99)]
-            else: return []
-        if not total_flipped: return []
         return total_flipped
 
     def evaluate_board(self, board, color):
-        opp = 'white' if color == 'black' else 'black'
-        score, empty_count = 0, list(board.values()).count(None)
-        is_endgame = empty_count < 10
+        score = 0
         for coord, st in board.items():
             if st is None: continue
-            val = 10 if is_endgame else 1
-            if coord in CIRCUMFERENCE: val += 15 if not is_endgame else 5
+            val = 15 if coord in CIRCUMFERENCE else 1
             score += val if st == color else -val
         return score
 
@@ -215,8 +194,7 @@ class NipApp(App):
         for move, flipped in moves:
             nb = board.copy()
             nb[move] = curr_p
-            for f in flipped:
-                if f != (99,99): nb[f] = curr_p
+            for f in flipped: nb[f] = curr_p
             res = self.minimax(nb, depth - 1, alpha, beta, not is_maximizing, color)
             if is_maximizing:
                 v = max(v, res); alpha = max(alpha, v)
@@ -232,8 +210,7 @@ class NipApp(App):
         scored = []
         for m, f in moves:
             nb = self.board_state.copy(); nb[m] = self.turn
-            for s in f: 
-                if s != (99,99): nb[s] = self.turn
+            for s in f: nb[s] = self.turn
             v = self.minimax(nb, depth, -20000, 20000, False, self.turn)
             scored.append((m, v))
         scored.sort(key=lambda x: x[1], reverse=True)
@@ -245,8 +222,7 @@ class NipApp(App):
             self.history.append({'board': self.board_state.copy(), 'turn': self.turn})
             new_board = self.board_state.copy()
             new_board[coord] = self.turn
-            for n in to_flip:
-                if n in VALID_COORDS: new_board[n] = self.turn
+            for n in to_flip: new_board[n] = self.turn
             self.board_state = new_board
             self.turn = 'white' if self.turn == 'black' else 'black'
             self.update_status()
@@ -281,11 +257,9 @@ class NipApp(App):
 
     def end_game(self):
         b, w = list(self.board_state.values()).count('black'), list(self.board_state.values()).count('white')
-        res = "引き分け" if b==w else ("黒の勝ち！" if b>w else "白の勝ち！")
+        res = "DRAW" if b==w else ("BLACK WIN!" if b>w else "WHITE WIN!")
         self.big_res_text = res
 
-# --- 元のデザインを維持しつつ、巨大文字を追加 ---
-# --- デザイン修正版 ---
 Builder.load_string('''
 <MenuScreen>:
     BoxLayout:
@@ -299,35 +273,32 @@ Builder.load_string('''
                 pos: self.pos
                 size: self.size
         Label:
-            text: "NIP 戦略モード"
+            text: "NIP STRATEGY"
             font_size: '30sp'
             bold: True
             size_hint_y: 0.2
         Button:
-            text: "人 対 人"
+            text: "PLAYER vs PLAYER"
             size_hint_y: 0.15
             on_release: app.start_game("PvP")
-        Widget:
-            size_hint_y: 0.05
         Label:
-            text: "--- CPU対戦設定 ---"
+            text: "--- CPU SETTINGS ---"
             size_hint_y: 0.1
         BoxLayout:
             size_hint_y: 0.15
             spacing: 10
             ToggleButton:
                 id: cpu_white
-                text: "CPU後手(白)"
+                text: "CPU: WHITE"
                 group: 'side'
                 state: 'down'
             ToggleButton:
                 id: cpu_black
-                text: "CPU先手(黒)"
+                text: "CPU: BLACK"
                 group: 'side'
         BoxLayout:
             size_hint_y: 0.15
             spacing: 5
-            id: lv_box
             ToggleButton:
                 text: "Lv1"
                 group: 'lv'
@@ -350,11 +321,11 @@ Builder.load_string('''
                 group: 'lv'
                 id: lv5
         Button:
-            text: "対戦開始"
+            text: "START GAME"
             size_hint_y: 0.2
             background_color: 0.5, 0.8, 1, 1
             on_release:
-                side = "後手" if cpu_white.state == 'down' else "先手"
+                side = "先手" if cpu_black.state == 'down' else "後手"
                 level = 1 if lv1.state == 'down' else (2 if lv2.state == 'down' else (3 if lv3.state == 'down' else (4 if lv4.state == 'down' else 5)))
                 app.start_game("PvE", side, level)
 
@@ -363,13 +334,11 @@ Builder.load_string('''
         orientation: 'vertical'
         BoxLayout:
             size_hint_y: 0.1
-            padding: 5
-            spacing: 5
             Button:
-                text: "戻る"
+                text: "UNDO"
                 on_release: app.undo()
             Button:
-                text: "メニュー"
+                text: "MENU"
                 on_release: app.sm.current = 'menu'
         NipBoard:
             id: board_widget
@@ -377,25 +346,27 @@ Builder.load_string('''
             size_hint_y: 0.7
         Label:
             text: app.big_res_text
-            font_size: '60sp'
+            font_size: '40sp'
             color: 1, 0, 0, 1
             size_hint_y: 0.12
             bold: True
         Label:
-            id: status_label
             text: app.status_text
             size_hint_y: 0.08
             bold: True
             font_size: '18sp'
 ''')
 
-# --- 最終起動コード ---
+# --- Web版のための起動処理 ---
 async def main():
     app = NipApp()
+    # async_run() を await するのが現代的な Web Kivy の書き方です
     await app.async_run()
 
 if __name__ == "__main__":
     if IS_WEB:
+        # Web版 (pygbag) 用
         asyncio.run(main())
     else:
+        # ローカル/Android用
         NipApp().run()
