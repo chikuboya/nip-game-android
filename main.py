@@ -1,13 +1,11 @@
+import os
+os.environ['KIVY_NO_ARGS'] = '1'
 import math
 import random
 import sys
 import asyncio
 from kivy.app import App
 from kivy.uix.widget import Widget
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.button import Button
-from kivy.uix.label import Label
-from kivy.uix.gridlayout import GridLayout
 from kivy.uix.screenmanager import ScreenManager, Screen
 from kivy.graphics import Color, Ellipse, Line, Rectangle
 from kivy.properties import DictProperty, StringProperty, NumericProperty, ObjectProperty
@@ -22,7 +20,6 @@ IS_WEB = 'pygbag' in sys.modules
 try:
     if not IS_WEB:
         LabelBase.register(DEFAULT_FONT, "font.ttc")
-    # Web版では標準フォントを使用し、ファイルの読み込み待ちによるフリーズを回避
 except Exception as e:
     print(f"Font Load Error: {e}")
 
@@ -123,6 +120,7 @@ class NipApp(App):
         self.mode = mode
         self.cpu_level = level
         if mode == "PvE":
+            # 内部的な色管理
             self.cpu_color = 'black' if cpu_side == "先手" else 'white'
         else:
             self.cpu_color = None
@@ -170,8 +168,7 @@ class NipApp(App):
                     if st == opp: path.append(curr)
                     elif st == color: circle_flipped.extend(path); break
                     else: break
-        total_flipped = list(set(normal_flipped + circle_flipped))
-        return total_flipped
+        return list(set(normal_flipped + circle_flipped))
 
     def evaluate_board(self, board, color):
         score = 0
@@ -184,10 +181,7 @@ class NipApp(App):
     def minimax(self, board, depth, alpha, beta, is_maximizing, color):
         opp = 'white' if color == 'black' else 'black'
         curr_p = color if is_maximizing else opp
-        moves = []
-        for n in VALID_COORDS:
-            f = self.get_flipped(n, curr_p, board)
-            if f: moves.append((n, f))
+        moves = [(n, self.get_flipped(n, curr_p, board)) for n in VALID_COORDS if self.get_flipped(n, curr_p, board)]
         if depth == 0 or not moves: return self.evaluate_board(board, color)
         
         v = -20000 if is_maximizing else 20000
@@ -204,17 +198,46 @@ class NipApp(App):
         return v
 
     def cpu_move(self):
+        # 有効な手をすべて取得
         moves = [(n, self.get_flipped(n, self.turn, self.board_state)) for n in VALID_COORDS if self.get_flipped(n, self.turn, self.board_state)]
         if not moves: return
-        depth = {1: 0, 2: 1, 3: 2, 4: 2, 5: 3}[self.cpu_level]
-        scored = []
-        for m, f in moves:
-            nb = self.board_state.copy(); nb[m] = self.turn
-            for s in f: nb[s] = self.turn
-            v = self.minimax(nb, depth, -20000, 20000, False, self.turn)
-            scored.append((m, v))
-        scored.sort(key=lambda x: x[1], reverse=True)
-        self.make_move(scored[0][0])
+        
+        # 盤面の石の数をカウント
+        stone_count = sum(1 for v in self.board_state.values() if v is not None)
+        empty_count = len(VALID_COORDS) - stone_count
+        
+        best_m = None
+
+        # --- 【修正】白（後手）の最初の一手は「盤面に5個」ある時 ---
+        # 黒が1手打った直後なので、石は必ず5個です
+        if self.turn == 'white' and stone_count == 5:
+            best_m = random.choice(moves)[0]
+        
+        else:
+            # レベルに応じた深さで探索
+            depth = {1: 0, 2: 1, 3: 2, 4: 2, 5: 3}[self.cpu_level]
+            scored = []
+            for m, f in moves:
+                nb = self.board_state.copy()
+                nb[m] = self.turn
+                for s in f:
+                    if s != (99,99): nb[s] = self.turn
+                v = self.minimax(nb, depth, -20000, 20000, False, self.turn)
+                scored.append((m, v))
+            
+            # 同じスコアの手が並んだ時に、常に同じ場所を選ばないようシャッフル
+            random.shuffle(scored)
+            # その後、スコア順にソート
+            scored.sort(key=lambda x: x[1], reverse=True)
+            
+            # --- ロジック2: 空きマス30個以上の時、30%の確率で次善手 ---
+            if empty_count > 30 and random.random() < 0.30 and len(scored) > 1:
+                top_k = min(3, len(scored))
+                best_m = scored[random.randint(0, top_k-1)][0]
+            else:
+                best_m = scored[0][0]
+
+        self.make_move(best_m)
 
     def make_move(self, coord):
         to_flip = self.get_flipped(coord, self.turn, self.board_state)
@@ -357,16 +380,12 @@ Builder.load_string('''
             font_size: '18sp'
 ''')
 
-# --- Web版のための起動処理 ---
 async def main():
     app = NipApp()
-    # async_run() を await するのが現代的な Web Kivy の書き方です
     await app.async_run()
 
 if __name__ == "__main__":
     if IS_WEB:
-        # Web版 (pygbag) 用
         asyncio.run(main())
     else:
-        # ローカル/Android用
-        NipApp().run()
+        NipApp().run()  
